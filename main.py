@@ -8,25 +8,25 @@ n = 4000
 
 def way1():
     sample_positions_x = [
-        # np.full(n, -10.0),
-        # np.linspace(-0.5, 0.5, n),
-        # np.linspace(8.0, 12.0, n),
-
         np.full(n, -10.0),
         np.linspace(-0.5, 0.5, n),
         np.linspace(8.0, 12.0, n),
-        np.linspace(-12, 20, n),
+
+        # np.full(n, -10.0),
+        # np.linspace(-0.5, 0.5, n),
+        # np.linspace(8.0, 12.0, n),
+        # np.linspace(-12, 20, n),
     ]
 
     sample_positions_y = [
-        # np.full(n, -10.0),
-        # np.full(n, 0.0),
-        # np.full(n, 10.0),
-
         np.full(n, -10.0),
         np.full(n, 0.0),
-        np.linspace(12.0, 8.0, n),
-        np.full(n, 0.0),
+        np.full(n, 10.0),
+
+        # np.full(n, -10.0),
+        # np.full(n, 0.0),
+        # np.linspace(12.0, 8.0, n),
+        # np.full(n, 0.0),
     ]
 
     samples = np.full(n, 0.0)
@@ -56,8 +56,8 @@ def way1():
 
     samples = bounce(0, 1, samples, 1)
     samples = bounce(1, 2, samples, 1)
-    samples = bounce(2, 1, samples, 1)
-    samples = bounce(2, 3, samples, 1)
+    # samples = bounce(2, 1, samples, 1)
+    # samples = bounce(2, 3, samples, 1)
 
     return samples
 
@@ -81,11 +81,11 @@ def way0():
 
     return result
 
-# result = way0()
-# plt.plot(np.linspace(8, 12, n), result)
-# plt.show()
+result = way0()
+plt.plot(np.linspace(8, 12, n), result)
+plt.show()
 result = way1()
-plt.plot(np.linspace(-12, 20, n), result)
+plt.plot(np.linspace(8, 12, n), result)
 plt.show()
 
 
