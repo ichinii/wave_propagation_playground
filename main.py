@@ -10,6 +10,10 @@ import cmath
 def length(ax, ay, bx, by):
     return np.sqrt((ax - bx)**2 + (ay - by)**2)
 
+def cartesian_product(a, b):
+    A, B = np.meshgrid(a, b, indexing='ij')
+    return A.flatten(), B.flatten()
+
 ### scene ###
 
 def create_empty_scene(samples_per_wavelength, wavelength):
@@ -54,68 +58,68 @@ def object_dx(scene, i):
 
 ### simulate ###
 
-def huygens_fresnel(scene):
+"""
+    2D Rayleigh-Sommerfeld diffraction integral (RS1)
+    far-field approximation, because we are missing the Henkel function term that accounts for near-field effects
+"""
+def rayleigh_sommerfeld(scene, ia, ib, s):
+    # cartesian product of the samples in the source and destination objects
+    bx, ax = cartesian_product(scene.pos_x[ib], scene.pos_x[ia])
+    by, ay = cartesian_product(scene.pos_y[ib], scene.pos_y[ia])
+    num_samples = len(ax)
+
+    # the vector from each sample in the source to each sample in the destination
+    v = np.array([bx - ax, by - ay]).T
+    l = length(ax, ay, bx, by)
+    d = v / l[:, np.newaxis]
+
+    # RS1 obliquity factor: cos(theta) where theta is the angle between the normal of the source and the direction to the destination
+    # this is Rayleigh-Sommerfeld correction to the Huygens-Fresnel principle,
+    # which accounts for the fact that the contribution from each sample in the source is not isotropic,
+    # but depends on the angle to the destination
+    # ensures that the total power is conserved
+    if (scene.normal[ia] is None):
+        cos_theta = 1.0
+    else:
+        n = np.tile(scene.normal[ia], (num_samples, 1))
+        cos_theta = np.abs(np.sum(d * n, axis=1))
+
+    # repeat the source samples for each destination sample
+    s = np.tile(s, object_num_samples(scene, ib))
+
+    # the contribution from each sample in the source to each sample in the destination is given by the Huygens-Fresnel principle
+    k = 2.0 * np.pi / scene.wavelength
+    p = np.exp(1j * k * l) / np.sqrt(l) * cos_theta * s
+
+    # reshape the result to have one row per destination sample and one column per source sample,
+    # in order to sum the contributions from each source sample to each destination sample
+    p = p.reshape(object_num_samples(scene, ib), object_num_samples(scene, ia))
+
+    # riemann sum: sum over source samples of p * dx, where dx is the spacing between samples in the source object
+    result = np.sum(p, axis=1) * object_dx(scene, ia)
+
+    # normalization factor: 1/sqrt(i * wavelength)
+    # ensures that the total power is conserved
+    # note: 1.0 / np.sqrt(1j * scene.wavelength) == np.sqrt(k / (2.0j * np.pi))
+    norm_factor = 1.0 / np.sqrt(1j * scene.wavelength)
+    return norm_factor * result
+
+def trace(propagate, scene):
     for i in range(scene_num_objects(scene)):
         n = object_num_samples(scene, i)
         l = object_length(scene, i)
         dx = object_dx(scene, i)
         print(f'{i}: n={n}, l={l}, dx={dx}')
 
-    def cartesian_product(a, b):
-        A, B = np.meshgrid(a, b, indexing='ij')
-        return A.flatten(), B.flatten()
-
-    # propagate the samples from object ia to object ib, given the samples in the source object
-    def propagate(ia, ib, s):
-        # cartesian product of the samples in the source and destination objects
-        bx, ax = cartesian_product(scene.pos_x[ib], scene.pos_x[ia])
-        by, ay = cartesian_product(scene.pos_y[ib], scene.pos_y[ia])
-        num_samples = len(ax)
-
-        # the vector from each sample in the source to each sample in the destination
-        v = np.array([bx - ax, by - ay]).T
-        l = length(ax, ay, bx, by)
-        d = v / l[:, np.newaxis]
-
-        # RS1 obliquity factor: cos(theta) where theta is the angle between the normal of the source and the direction to the destination
-        # this is Rayleigh-Sommerfeld correction to the Huygens-Fresnel principle,
-        # which accounts for the fact that the contribution from each sample in the source is not isotropic,
-        # but depends on the angle to the destination
-        # ensures that the total power is conserved
-        if (scene.normal[ia] is None):
-            cos_theta = 1.0
-        else:
-            n = np.tile(scene.normal[ia], (num_samples, 1))
-            cos_theta = np.abs(np.sum(d * n, axis=1))
-
-        # repeat the source samples for each destination sample
-        s = np.tile(s, object_num_samples(scene, ib))
-
-        # the contribution from each sample in the source to each sample in the destination is given by the Huygens-Fresnel principle
-        k = 2.0 * np.pi / scene.wavelength
-        p = np.exp(1j * k * l) / np.sqrt(l) * cos_theta * s
-
-        # reshape the result to have one row per destination sample and one column per source sample,
-        # in order to sum the contributions from each source sample to each destination sample
-        p = p.reshape(object_num_samples(scene, ib), object_num_samples(scene, ia))
-
-        # riemann sum: sum over source samples of p * dx, where dx is the spacing between samples in the source object
-        result = np.sum(p, axis=1) * object_dx(scene, ia)
-
-        # normalization factor: 1/sqrt(i * wavelength)
-        # ensures that the total power is conserved
-        norm_factor = 1.0 / np.sqrt(1j * scene.wavelength)
-        return norm_factor * result
-
     # if there is no DAG preset. create one where each object depends on the previous one (sequential propagation)
-    if not hasattr(scene, "trace"):
-        scene.trace = [ [] ]
+    if not hasattr(scene, "trace_dag"):
+        scene.trace_dag = [ [] ]
         for i in range(scene_num_objects(scene) - 1):
-            scene.trace.append([i])
+            scene.trace_dag.append([i])
 
     samples = []
 
-    for i, deps in enumerate(scene.trace):
+    for i, deps in enumerate(scene.trace_dag):
         print(f"{i} depends on {deps}")
         if len(deps) == 0:
             print(f"initial condition for {i}")
@@ -123,13 +127,13 @@ def huygens_fresnel(scene):
             samples.append(s)
         elif len(deps) == 1:
             print(f"propagate {deps[0]} -> {i}")
-            s = propagate(deps[0], i, samples[deps[0]])
+            s = propagate(scene, deps[0], i, samples[deps[0]])
             samples.append(s)
         else:
             res = []
             for d in deps:
                 print(f"propagate {d} -> {i}")
-                res.append(propagate(d, i, samples[d]))
+                res.append(propagate(scene, d, i, samples[d]))
             print(f"sum contributions for {i}")
             res = np.sum(res, axis=0)
             samples.append(res)
@@ -144,8 +148,7 @@ def intensity(a):
 def total_power(a, dx):
     return np.sum(intensity(a)) * dx
 
-def plot(scene):
-    result = huygens_fresnel(scene)
+def plot(scene, result):
     intens = [intensity(s) for s in result]
     tot = [total_power(s, object_dx(scene, i)) for i, s in enumerate(result)]
     tot_factor = [tot[i+1] / tot[i] for i in range(len(result) - 1)]
@@ -206,7 +209,7 @@ def create_scene_double_slit():
     scene_append_line(scene, [0, -slit_radius - slit_spacer], [0, slit_radius - slit_spacer])
     scene_append_line(scene, [0, -slit_radius + slit_spacer], [0, slit_radius + slit_spacer])
     scene_append_line(scene, [10, -10], [10, 10])
-    scene.trace = [
+    scene.trace_dag = [
         [],
         [0],
         [0],
@@ -214,7 +217,8 @@ def create_scene_double_slit():
     ]
     return scene
 
-plot(create_scene_law_of_reflection())
-# plot(create_scene_hard_cutoff())
-# plot(create_scene_single_slit())
-# plot(create_scene_double_slit())
+# scene = create_scene_law_of_reflection()
+# scene = create_scene_hard_cutoff()
+# scene = create_scene_single_slit()
+scene = create_scene_double_slit()
+plot(scene, trace(rayleigh_sommerfeld, scene))
