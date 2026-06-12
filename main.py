@@ -61,8 +61,6 @@ def huygens_fresnel(scene):
         dx = object_dx(scene, i)
         print(f'{i}: n={n}, l={l}, dx={dx}')
 
-    s = np.full(object_num_samples(scene, 0), cmath.rect(1, 0))
-
     def cartesian_product(a, b):
         A, B = np.meshgrid(a, b, indexing='ij')
         return A.flatten(), B.flatten()
@@ -76,27 +74,47 @@ def huygens_fresnel(scene):
         l = length(ax, ay, bx, by)
         d = v / l[:, np.newaxis]
 
-        k = 2.0 * np.pi / scene.wavelength
-
-        # if (scene.normal[ia] is None):
-        #     cos_theta = 1.0
-        # else:
-        # TODO: ia or ib
-        n = np.tile(scene.normal[ib], (num_samples, 1))
-        cos_theta = np.abs(np.sum(d * n, axis=1))
+        if (scene.normal[ia] is None):
+            cos_theta = 1.0
+        else:
+            n = np.tile(scene.normal[ia], (num_samples, 1))
+            cos_theta = np.abs(np.sum(d * n, axis=1))
 
         s = np.tile(s, object_num_samples(scene, ib))
+        k = 2.0 * np.pi / scene.wavelength
         p = (np.exp(1j * k * l) / np.sqrt(l)) * cos_theta * s
         p = p.reshape(object_num_samples(scene, ib), object_num_samples(scene, ia))
 
         norm_factor = 1.0 / np.sqrt(1j * scene.wavelength)
         return norm_factor * np.sum(p, axis=1) * object_dx(scene, ia)
 
+    # if there is no DAG preset. create one where each object depends on the previous one (sequential propagation)
+    if not hasattr(scene, "trace"):
+        scene.trace = [ [] ]
+        for i in range(scene_num_objects(scene) - 1):
+            scene.trace.append([i])
+
     samples = []
-    samples.append(s)
-    for i in range(scene_num_objects(scene) - 1):
-        s = propagate(i, i + 1, s)
-        samples.append(s)
+
+    for i, deps in enumerate(scene.trace):
+        print(f"{i} depends on {deps}")
+        if len(deps) == 0:
+            print(f"initial condition for {i}")
+            s = np.full(object_num_samples(scene, i), cmath.rect(1, 0))
+            samples.append(s)
+        elif len(deps) == 1:
+            print(f"propagate {deps[0]} -> {i}")
+            s = propagate(deps[0], i, samples[deps[0]])
+            samples.append(s)
+        else:
+            res = []
+            for d in deps:
+                print(f"propagate {d} -> {i}")
+                res.append(propagate(d, i, samples[d]))
+            print(f"sum contributions for {i}")
+            res = np.sum(res, axis=0)
+            samples.append(res)
+
     return samples
 
 ### analysis ###
@@ -107,41 +125,77 @@ def intensity(a):
 def total_power(a, dx):
     return np.sum(intensity(a)) * dx
 
+def plot(scene):
+    result = huygens_fresnel(scene)
+    intens = [intensity(s) for s in result]
+    tot = [total_power(s, object_dx(scene, i)) for i, s in enumerate(result)]
+    tot_factor = [tot[i+1] / tot[i] for i in range(len(result) - 1)]
+
+    for i in range(len(result)):
+        print(f'{i}: total power={tot[i]}')
+        if len(result[i]) == 1:
+            plt.plot(intens[i], label=f'{i}', marker='o')
+        else:
+            plt.plot(intens[i], label=f'{i}')
+
+    for i in range(len(tot_factor)):
+        print(f'{i} -> {i+1}: power factor={tot_factor[i]}')
+
+    plt.xlabel('sample index')
+    plt.ylabel('intensity')
+    fig = plt.gcf()
+    plt.legend()
+    plt.show()
+    plt.draw()
+    fig.savefig('img/prev.png')
+
 ### experiment ###
 
-scene = create_empty_scene(samples_per_wavelength=4, wavelength=0.00123456789)
-# scene_append_point(scene, [-10, 10])
-scene_append_line(scene, [-16, 4], [-4, 16])
-scene_append_line(scene, [-0.1, 0], [0.1, 0])
-scene_append_line(scene, [8, 10], [12, 10])
-scene_append_line(scene, [18, 0], [22, 0])
+def create_scene_law_of_reflection():
+    scene = create_empty_scene(samples_per_wavelength=4, wavelength=0.003123456789)
+    # scene_append_point(scene, [-10, 10])
+    scene_append_line(scene, [-16, 4], [-4, 16])
+    scene_append_line(scene, [-0.1, 0], [0.1, 0])
+    scene_append_line(scene, [8, 10], [12, 10])
+    scene_append_line(scene, [18, 0], [22, 0])
+    return scene
 
-result = huygens_fresnel(scene)
-intens = [intensity(s) for s in result]
-tot = [total_power(s, object_dx(scene, i)) for i, s in enumerate(result)]
-tot_factor = [tot[i+1] / tot[i] for i in range(len(result) - 1)]
+def create_scene_hard_cutoff():
+    scene = create_empty_scene(samples_per_wavelength=4, wavelength=0.003123456789)
+    scene_append_point(scene, [-10, 0])
+    scene_append_line(scene, [0, 0], [0, 5])
+    scene_append_line(scene, [10, -5], [10, 5])
+    return scene
 
-for i in range(len(result)):
-    print(f'{i}: total power={tot[i]}')
-    if len(result[i]) == 1:
-        plt.plot(intens[i], label=f'{i}', marker='o')
-    else:
-        plt.plot(intens[i], label=f'{i}')
+def create_scene_single_slit():
+    scene = create_empty_scene(samples_per_wavelength=4, wavelength=0.003123456789)
+    slit_width = scene.wavelength * 32
 
-for i in range(len(tot_factor)):
-    print(f'{i} -> {i+1}: power factor={tot_factor[i]}')
+    scene_append_line(scene, [-10, -10], [-10, 10])
+    scene_append_line(scene, [0, slit_width / -2], [0, slit_width / 2])
+    scene_append_line(scene, [10, -10], [10, 10])
+    return scene
 
-fig = plt.gcf()
-plt.legend()
-plt.show()
-plt.draw()
-fig.savefig('prev.png')
+def create_scene_double_slit():
+    scene = create_empty_scene(samples_per_wavelength=4, wavelength=0.003123456789)
+    slit_width = scene.wavelength * 8
+    slit_spacing = slit_width * 4
 
+    scene_append_line(scene, [-10, -10], [-10, 10])
+    slit_radius = slit_width / 2
+    slit_spacer = slit_spacing / 2 + slit_radius
+    scene_append_line(scene, [0, -slit_radius - slit_spacer], [0, slit_radius - slit_spacer])
+    scene_append_line(scene, [0, -slit_radius + slit_spacer], [0, slit_radius + slit_spacer])
+    scene_append_line(scene, [10, -10], [10, 10])
+    scene.trace = [
+        [],
+        [0],
+        [0],
+        [1, 2],
+    ]
+    return scene
 
-# reference
-## how many samples per wavelength
-
-# monte carlo
-## consider validity
-## consider if sampling gains information, that can be used for importance sampling
-## importance sampling: use attenuation distribution
+# plot(create_scene_law_of_reflection())
+# plot(create_scene_hard_cutoff())
+# plot(create_scene_single_slit())
+plot(create_scene_double_slit())
