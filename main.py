@@ -8,14 +8,16 @@ import jax
 import jax.numpy as jnp
 import jax.lax as lax
 import rayleigh_sommerfeld
+import rayleigh_sommerfeld_batched
 
 # jax.config.update("jax_transfer_guard", "log")
 # jax.config.update("jax_transfer_guard", "log_explicit")
 
 ### scene ###
 
-def create_empty_scene(samples_per_wavelength, wavelength):
+def create_empty_scene(name, samples_per_wavelength, wavelength):
     scene = {}
+    scene["name"] = name
     scene["samples_per_wavelength"] = samples_per_wavelength
     scene["wavelength"] = wavelength
     scene["objs"] = []
@@ -45,6 +47,10 @@ def accumulate(d_fields):
 def intensity(d_field):
     return jnp.abs(d_field) ** 2
 
+@jax.jit
+def total_power(d_intensity, d_dx):
+    return jnp.sum(d_intensity * d_dx)
+
 def create_sequential_trace_dag(n):
     if n == 0: return []
     dag = [[]]
@@ -53,11 +59,7 @@ def create_sequential_trace_dag(n):
     return dag
 
 def trace(algorithm, scene):
-    # for i in range(scene_num_objects(scene)):
-    #     n = object_num_samples(scene, i)
-    #     l = object_length(scene, i)
-    #     dx = object_dx(scene, i)
-    #     print(f'{i}: n={n}, l={l}, dx={dx}')
+    print(f"tracing scene: \"{scene['name']}\" with {len(scene['objs'])} objects")
 
     # if there is no DAG preset. create one where each object depends on the previous one (sequential propagation)
     if not "trace_dag" in scene.keys():
@@ -67,8 +69,6 @@ def trace(algorithm, scene):
     d_fields = []
 
     for i, deps in enumerate(scene["trace_dag"]):
-        print(f"simulate object {i}. depends on {deps}")
-
         if len(deps) == 0:
             d_fields.append(jnp.array([1.0 + 0.0j]))
         else:
@@ -77,10 +77,18 @@ def trace(algorithm, scene):
                 d_dst_fields.append(algorithm.propagate(d_scene, d, i, d_fields[d]))
             d_fields.append(accumulate(d_dst_fields))
 
-    # [print(field) for field in d_fields]
     d_intensities = [intensity(field) for field in d_fields]
     h_intensities = [np.array(jax.device_get(intensity)) for intensity in d_intensities]
-    print("done")
+    d_total_powers = [total_power(d_intensity, d_scene["objs"][i]["dx"]) for i, d_intensity in enumerate(d_intensities)]
+    h_total_powers = [np.array(jax.device_get(d_total_power)) for d_total_power in d_total_powers]
+
+    for i, deps in enumerate(scene["trace_dag"]):
+        tot = h_total_powers[i]
+        tot_deps = sum([h_total_powers[d] for d in deps])
+        print(f"{deps} -> {i}:")
+        print(f"  total power = {h_total_powers[i]}")
+        print(f"  power factor = {tot/tot_deps if tot_deps > 0 else float('inf')}")
+
     return h_intensities
 
 ### analysis ###
@@ -106,10 +114,10 @@ def plot(scene, intensities):
 ### experiment ###
 
 samples_per_wavelength = 4
-wavelength = 0.005123456789
+wavelength = 0.00123456789
 
 def create_scene_law_of_reflection():
-    scene = create_empty_scene(samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
+    scene = create_empty_scene("Law Of Reflection", samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
     # scene_append_point(scene, [-10, 10])
     scene_append_line(scene, [-16, 4], [-4, 16])
     scene_append_line(scene, [-0.1, 0], [0.1, 0])
@@ -118,14 +126,14 @@ def create_scene_law_of_reflection():
     return scene
 
 def create_scene_hard_cutoff():
-    scene = create_empty_scene(samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
+    scene = create_empty_scene("Hard Cutoff", samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
     scene_append_point(scene, [-10, 0])
     scene_append_line(scene, [0, 0], [0, 5])
     scene_append_line(scene, [10, -5], [10, 5])
     return scene
 
 def create_scene_single_slit():
-    scene = create_empty_scene(samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
+    scene = create_empty_scene("Single Slit", samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
     slit_width = scene["wavelength"] * 32
 
     scene_append_line(scene, [-10, -10], [-10, 10])
@@ -134,7 +142,7 @@ def create_scene_single_slit():
     return scene
 
 def create_scene_double_slit():
-    scene = create_empty_scene(samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
+    scene = create_empty_scene("Double Slit", samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
     slit_width = scene["wavelength"] * 4
     slit_spacing = slit_width * 4
 
@@ -152,23 +160,30 @@ def create_scene_double_slit():
     ]
     return scene
 
-def create_test_scene():
-    scene = create_empty_scene(samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
-    for i in range(4):
-        scene_append_line(scene, [i, 0], [i, 10])
+def create_scene_sequential_beam(n):
+    scene = create_empty_scene(f"Sequential Beam ({n})", samples_per_wavelength=samples_per_wavelength, wavelength=wavelength)
+    for i in range(n):
+        x = i/(n-1)*10
+        scene_append_line(scene, [x, 0], [x, 10])
     return scene
 
-# scene = create_scene_law_of_reflection()
-# scene = create_scene_hard_cutoff()
-# scene = create_scene_single_slit()
-# scene = create_test_scene()
-scenes = [create_scene_law_of_reflection(), create_scene_hard_cutoff(), create_scene_single_slit(), create_scene_double_slit(), create_test_scene()]
-# scenes = [create_scene_double_slit()]
+scenes = [create_scene_law_of_reflection(), create_scene_hard_cutoff(), create_scene_single_slit(), create_scene_double_slit()]
+# scenes = [create_scene_law_of_reflection()]
+# scenes = [create_scene_sequential_beam(2)]
+# scenes = [create_scene_sequential_beam(2), create_scene_sequential_beam(10)]
 
 algorithm = rayleigh_sommerfeld
-[trace(algorithm, scene) for scene in scenes] # warmup to trigger JIT compilation before timing
-print(timeit.timeit(lambda:
-    [trace(algorithm, scene) for scene in scenes]
-, number=1))
 
-# [plot(scene, trace(algorithm, scene)) for scene in scenes] # warmup to trigger JIT compilation before timing
+print()
+print("WARMUP")
+[trace(algorithm, scene) for scene in scenes] # warmup to trigger JIT compilation before timing
+
+print()
+print("GO")
+def perf():
+    return timeit.timeit(lambda: [trace(algorithm, scene) for scene in scenes] , number=1)
+print(f"total time: {perf()} seconds")
+
+# [plot(scene, trace(algorithm, scene)[0]) for scene in scenes] # warmup to trigger JIT compilation before timing
+
+print(f"cache size: {algorithm._rayleigh_sommerfeld_kernel._cache_size()}")

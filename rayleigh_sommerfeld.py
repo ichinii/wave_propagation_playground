@@ -93,7 +93,6 @@ def _rayleigh_sommerfeld_kernel(
     # the contribution from each sample in the source to each sample in the destination is given by the Huygens-Fresnel principle
     k = 2.0 * jnp.pi / wavelength
 
-    # Green's function mapping
     # shape: (num_dst, num_src)
     p = (jnp.exp(1j * k * l) / jnp.sqrt(l)) * cos_theta * src_field
 
