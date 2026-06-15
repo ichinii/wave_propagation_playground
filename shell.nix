@@ -4,7 +4,7 @@ let
     matplotlib
     pyqt6
     numpy
-    # You can list other pure Python dependencies here
+    jax
   ]);
 in
 pkgs.mkShell {
