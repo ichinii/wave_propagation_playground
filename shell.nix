@@ -5,6 +5,12 @@ let
     pyqt6
     numpy
     jax
+    panel
+    bokeh
+    plotly
+    markdown-it-py
+    mdit-py-plugins
+    linkify-it-py
   ]);
 in
 pkgs.mkShell {
@@ -12,7 +18,7 @@ pkgs.mkShell {
     pkgs.python313
     pkgs.stdenv.cc.cc.lib
     pkgs.libz
-    pkgs.xorg.libX11
+    pkgs.libx11
   ];
   packages = [
     pythonEnv

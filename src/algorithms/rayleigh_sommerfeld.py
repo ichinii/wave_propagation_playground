@@ -1,47 +1,7 @@
-import numpy as np
 import math
 import jax
 import jax.numpy as jnp
-
-def _instantiate_object(obj, samples_per_wavelength, wavelength):
-    def instantiate_point(obj):
-        return {
-            "pos_x": jnp.array([obj["pos"][0]]),
-            "pos_y": jnp.array([obj["pos"][1]]),
-            "normal_x": jnp.array([1.0]),
-            "normal_y": jnp.array([0.0]),
-            "dx": jnp.array([1.0]),
-        }
-
-    def instantiate_line(obj):
-        pos_a = np.array(obj["pos_a"])
-        pos_b = np.array(obj["pos_b"])
-        l = np.sqrt((pos_a[0] - pos_b[0])**2 + (pos_a[1] - pos_b[1])**2)
-        n = math.ceil(samples_per_wavelength * l / wavelength)
-        v = pos_b - pos_a
-        return {
-            "pos_x": jnp.linspace(pos_a[0], pos_b[0], n),
-            "pos_y": jnp.linspace(pos_a[1], pos_b[1], n),
-            "normal_x": jnp.array([v[1] / l]),
-            "normal_y": jnp.array([v[0] / -l]),
-            "dx": jnp.array([l / (n - 1)]),
-        }
-
-    if obj["type"] == "point": return instantiate_point(obj)
-    if obj["type"] == "line": return instantiate_line(obj)
-    else:
-        raise ValueError(f"unknown obj type: {obj['type']}")
-
-def instantiate(scene):
-    d_scene = {
-        "wavelength": jnp.array(scene["wavelength"]),
-    }
-
-    def instantiate_object(obj):
-        return _instantiate_object(obj, scene["samples_per_wavelength"], scene["wavelength"])
-    d_scene["objs"] = [instantiate_object(obj) for obj in scene["objs"]]
-
-    return d_scene
+import numpy as np
 
 """
     2D Rayleigh-Sommerfeld diffraction integral (RS1)
@@ -107,15 +67,15 @@ def _rayleigh_sommerfeld_kernel(
 
     return dst_field
 
-def propagate(d_scene, ia, ib, d_src_field):
+def propagate(d_scene, ia, ib, d_src_field, src_slit, dst_slit):
     return _rayleigh_sommerfeld_kernel(
-        d_scene["objs"][ia]["pos_x"],
-        d_scene["objs"][ia]["pos_y"],
-        d_scene["objs"][ia]["normal_x"],
-        d_scene["objs"][ia]["normal_y"],
-        d_scene["objs"][ia]["dx"],
+        d_scene.objs[ia]["pos_x"],
+        d_scene.objs[ia]["pos_y"],
+        d_scene.objs[ia]["normal_x"],
+        d_scene.objs[ia]["normal_y"],
+        d_scene.objs[ia]["dx"],
         d_src_field,
-        d_scene["objs"][ib]["pos_x"],
-        d_scene["objs"][ib]["pos_y"],
-        d_scene["wavelength"],
+        d_scene.objs[ib]["pos_x"],
+        d_scene.objs[ib]["pos_y"],
+        d_scene.wavelength,
     )
